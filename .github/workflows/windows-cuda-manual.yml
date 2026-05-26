@@ -1,6 +1,9 @@
 name: Windows CUDA Qwen3-ASR Build
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       cuda:

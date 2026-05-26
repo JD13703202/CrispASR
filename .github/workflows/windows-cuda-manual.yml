@@ -1,0 +1,85 @@
+name: Windows CUDA Qwen3-ASR Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch, tag, or commit SHA). Defaults to the selected workflow ref."
+        required: false
+        type: string
+      cuda:
+        description: "CUDA Toolkit version"
+        required: true
+        default: "12.8.0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref || 'default' }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-cuda:
+    name: Build Windows CUDA Qwen3-ASR exe
+    runs-on: windows-latest
+    env:
+      CUDA_VERSION: ${{ inputs.cuda }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "nvrtc", "nvrtc_dev", "nvtx", "cuda_profiler_api", "visual_studio_integration"]'
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
+            -DBUILD_SHARED_LIBS=OFF ^
+            -DGGML_STATIC=ON ^
+            -DGGML_CUDA=ON ^
+            -DCMAKE_CUDA_ARCHITECTURES="75-real;86-real;89-real;120-real;120-virtual" ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON
+          cmake --build build --target crispasr-cli -j %NUMBER_OF_PROCESSORS%
+
+      - name: Package exe and CUDA runtime DLLs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release\crispasr-windows-x86_64-cuda-qwen3asr | Out-Null
+          Copy-Item build\bin\crispasr.exe release\crispasr-windows-x86_64-cuda-qwen3asr\
+          Get-ChildItem build\bin\*.dll -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike 'Catch2*' } |
+            Copy-Item -Destination release\crispasr-windows-x86_64-cuda-qwen3asr\
+          Copy-Item "$env:CUDA_PATH\bin\cudart64_*.dll"   release\crispasr-windows-x86_64-cuda-qwen3asr\ -ErrorAction SilentlyContinue
+          Copy-Item "$env:CUDA_PATH\bin\cublas64_*.dll"   release\crispasr-windows-x86_64-cuda-qwen3asr\ -ErrorAction SilentlyContinue
+          Copy-Item "$env:CUDA_PATH\bin\cublasLt64_*.dll" release\crispasr-windows-x86_64-cuda-qwen3asr\ -ErrorAction SilentlyContinue
+          @'
+          Usage:
+            crispasr.exe --backend qwen3 -m path\to\qwen3-asr.gguf -f path\to\audio.wav
+
+          Notes:
+            - Qwen3-ASR support is compiled into crispasr.exe.
+            - The GGUF model is not bundled; pass it with -m.
+            - CUDA runtime DLLs are bundled next to the exe.
+          '@ | Set-Content -NoNewline release\crispasr-windows-x86_64-cuda-qwen3asr\README.txt
+          Compress-Archive -Path release\crispasr-windows-x86_64-cuda-qwen3asr -DestinationPath release\crispasr-windows-x86_64-cuda-qwen3asr.zip -CompressionLevel Optimal
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crispasr-windows-x86_64-cuda-qwen3asr
+          path: release/crispasr-windows-x86_64-cuda-qwen3asr.zip
+          if-no-files-found: error

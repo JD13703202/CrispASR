@@ -24,7 +24,7 @@ jobs:
     name: Build Windows CUDA Qwen3-ASR exe
     runs-on: windows-latest
     env:
-      CUDA_VERSION: ${{ inputs.cuda }}
+      CUDA_VERSION: ${{ github.event.inputs.cuda || '12.8.0' }}
 
     steps:
       - name: Checkout
